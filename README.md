@@ -20,6 +20,31 @@ and normalizes findings into a consistent evidence-driven format.
 - `dir_enum`: `ffuf` directory enumeration against live HTTP targets
 - `port_scan`: `nmap` TCP port and service detection
 - `cve_match`: offline candidate-only CVE matching from previously observed evidence
+- `ai_triage`: LLM-in-the-loop analyst that risk-scores observed hosts/subdomains and, in
+  `act` mode, autonomously enqueues deeper **scope-locked, safe** scans on the riskiest targets
+
+## ai_triage: LLM-in-the-loop scanning
+
+The optional `ai_triage` phase adds an analyst to the scan loop. After recon it builds a
+compact, redacted evidence summary and asks an LLM to rank hosts/subdomains/URLs by how much
+they warrant deeper (but still safe) enumeration. In `act` mode it converts the highest-risk
+targets into follow-up scans and re-queues itself — a bounded agentic loop.
+
+Safety is enforced by construction:
+
+- It only acts on targets already observed by recon, and only within the authorized scope
+  (subdomains of the run target / IPs in range). It never invents new targets.
+- It can only trigger existing safe enumeration phases (http_probe / dir_enum / port_scan).
+  No exploit delivery, no credential attacks, no evasion. AI findings are `candidate`-only.
+- Autonomy is bounded by `ai_max_followups`, `ai_max_iterations`, and `ai_min_risk_to_act`.
+
+Provider/degradation: `ai_provider` selects `anthropic` (default) or `openai`; the key is read
+from the env var named by `ai_api_key_env` (`ANTHROPIC_API_KEY` by default). Calls go over the
+existing `httpx` dependency. With no API key (or any LLM error) the phase still runs using a
+deterministic offline heuristic, so it works in CI/air-gapped environments.
+
+Enable it via the `ai` UI preset, or `--module ai_triage`. `ai_autonomy` accepts `act`
+(autonomous, default), `advise` (record risk findings only), or `off`.
 
 ## Requirements
 

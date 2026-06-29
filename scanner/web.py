@@ -42,6 +42,7 @@ from scanner.runner import (
     create_scan_run,
     enqueue_manual_dir_enum_targets,
     extend_scan_run,
+    execute_ai_triage_tasks,
     execute_banner_probe_tasks,
     execute_dir_enum_tasks,
     execute_domain_discovery_tasks,
@@ -101,6 +102,7 @@ MODULE_ORDER: tuple[str, ...] = (
     "dir_enum",
     "port_scan",
     "banner_probe",
+    "ai_triage",
 )
 PATCHABLE_CONFIG_FIELDS: tuple[str, ...] = (
     "profile",
@@ -244,6 +246,7 @@ MODULE_EXECUTORS: dict[str, PhaseExecutor] = {
     "dir_enum": execute_dir_enum_tasks,
     "port_scan": execute_port_scan_tasks,
     "banner_probe": execute_banner_probe_tasks,
+    "ai_triage": execute_ai_triage_tasks,
 }
 
 
@@ -2310,23 +2313,57 @@ class WebUIApp:
         return result
 
     def _execute_all_pending(self, run_id: str) -> None:
-        for module in self._execution_module_order(run_id):
+        # Multiple passes let the ai_triage phase enqueue scope-locked follow-up scans
+        # (and re-queue itself) and have that new work executed within the same run.
+        # Without ai_triage this collapses to a single pass (original behavior).
+        max_passes = self._max_execution_passes(run_id)
+        previous_signature: frozenset[str] | None = None
+        for _pass in range(max_passes):
             if self.execution_manager.is_cancel_requested(run_id):
                 self.execution_manager.append_log(run_id, "Execution loop stopped by cancellation request", level="warning")
                 break
-            view = self.get_run_view(run_id)
-            if str(view["run"]["status"]) == "cancelled":
-                self.execution_manager.append_log(run_id, "Execution loop observed cancelled run state", level="warning")
+            executed_any = False
+            for module in self._execution_module_order(run_id):
+                if self.execution_manager.is_cancel_requested(run_id):
+                    self.execution_manager.append_log(run_id, "Execution loop stopped by cancellation request", level="warning")
+                    break
+                view = self.get_run_view(run_id)
+                if str(view["run"]["status"]) == "cancelled":
+                    self.execution_manager.append_log(run_id, "Execution loop observed cancelled run state", level="warning")
+                    break
+                pending_modules = {
+                    str(task["module"])
+                    for task in view["tasks"]
+                    if str(task["state"]) in {"pending", "failed"}
+                }
+                if module not in pending_modules:
+                    continue
+                self._execute_module(run_id, module)
+                executed_any = True
+            signature = self._pending_task_signature(run_id)
+            # Stop when there is no pending work, nothing ran, or no progress was made
+            # (guards against re-running a permanently failing task forever).
+            if not signature or not executed_any or signature == previous_signature:
                 break
-            pending_modules = {
-                str(task["module"])
-                for task in view["tasks"]
-                if str(task["state"]) in {"pending", "failed"}
-            }
-            if module not in pending_modules:
-                continue
-            self._execute_module(run_id, module)
+            previous_signature = signature
         self._finalize_run_after_execution(run_id)
+
+    def _max_execution_passes(self, run_id: str) -> int:
+        view = self.get_run_view(run_id)
+        config = view["run"]["config"]
+        enabled = [str(module) for module in config.get("enabled_phases", [])]
+        if "ai_triage" not in enabled:
+            return 1
+        iterations = int(config.get("ai_max_iterations", 3) or 3)
+        return 1 + 2 * max(1, iterations)
+
+    def _pending_task_signature(self, run_id: str) -> frozenset[str]:
+        view = self.get_run_view(run_id)
+        return frozenset(
+            f"{task['task_id']}:{task['state']}"
+            for task in view["tasks"]
+            if str(task["state"]) in {"pending", "failed"}
+        )
 
     def _finalize_run_after_execution(self, run_id: str) -> None:
         state_db_path = self.workspace / "runs" / run_id / "state.db"

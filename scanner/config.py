@@ -25,7 +25,13 @@ MODULE_TO_TOOL: dict[ScanPhase, ToolName] = {
     "port_scan": "nmap",
     "banner_probe": "orchestrator",
     "cve_match": "cve_matcher",
+    "ai_triage": "ai_analyst",
 }
+
+# ai_triage is selectable and orders last, but is intentionally NOT in DEFAULT_MODULES:
+# it only runs when explicitly requested (via --module ai_triage or a UI preset), so
+# default runs keep their existing phase set and behavior.
+SELECTABLE_MODULES: tuple[ScanPhase, ...] = (*DEFAULT_MODULES, "cve_match", "ai_triage")
 
 TECH_EXTENSION_MAPPING: dict[str, list[str]] = {
     "php": [".php"],
@@ -80,6 +86,26 @@ UI_RUN_PRESETS: dict[str, dict[str, Any]] = {
             "ffuf_wordlist_path": str(DEFAULT_FFUF_WORDLIST),
             "nmap_ports": "1-65535",
             "ffuf_threads": 20,
+        },
+    },
+    "ai": {
+        "label": "AI-driven",
+        "description": "Full recon plus an LLM analyst that risk-scores findings and autonomously enqueues deeper, scope-locked scans.",
+        "modules": [
+            "subdomain_enum",
+            "http_probe",
+            "dir_enum",
+            "port_scan",
+            "banner_probe",
+            "ai_triage",
+        ],
+        "profile": "balanced",
+        "defaults": {
+            "ffuf_wordlist_path": str(DEFAULT_FFUF_WORDLIST),
+            "nmap_ports": "1-65535",
+            "ffuf_threads": 20,
+            "ai_triage_enabled": True,
+            "ai_autonomy": "act",
         },
     },
 }
@@ -211,7 +237,7 @@ def plan_enabled_phases(
     # user listed them, so phase ordering stays consistent.
     selected_set = set(selected_modules)
     planned: list[ScanPhase] = [cast(ScanPhase, "port_scan"), cast(ScanPhase, "http_probe")]
-    for module in ("domain_discovery", "banner_probe", "dir_enum"):
+    for module in ("domain_discovery", "banner_probe", "dir_enum", "cve_match", "ai_triage"):
         typed_module = cast(ScanPhase, module)
         if typed_module in selected_set and typed_module not in planned:
             planned.append(typed_module)
@@ -225,9 +251,11 @@ def normalize_modules(modules: Sequence[str] | None) -> list[ScanPhase]:
     selected = {_normalize_module_name(item) for raw in modules for item in raw.split(",") if item.strip()}
     if not selected:
         raise ValueError("at least one module must be selected")
-    ordered = [module for module in DEFAULT_MODULES if module in selected]
-    for module in selected:
-        if module not in DEFAULT_MODULES and module not in ordered:
+    # Deterministic ordering: SELECTABLE_MODULES fixes the phase order (ai_triage last so it
+    # can triage everything before it), then any remaining selected module is appended stably.
+    ordered = [module for module in SELECTABLE_MODULES if module in selected]
+    for module in sorted(selected):
+        if module not in ordered:
             ordered.append(module)
     return ordered
 

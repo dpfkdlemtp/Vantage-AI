@@ -964,7 +964,7 @@ def test_web_ui_exposes_presets_and_scope_controls(tmp_path: Path) -> None:
 
     try:
         presets = _request_json(base_url, "/api/presets")
-        assert set(presets["presets"]) == {"quick", "web", "full"}
+        assert set(presets["presets"]) == {"quick", "web", "full", "ai"}
         created = _request_json(
             base_url,
             "/api/runs",

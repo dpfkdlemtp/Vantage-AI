@@ -27,6 +27,7 @@ ScanPhase: TypeAlias = Literal[
     "banner_probe",
     "cve_match",
     "access_control",
+    "ai_triage",
 ]
 PhaseName: TypeAlias = Literal[
     "subdomain_enum",
@@ -36,9 +37,13 @@ PhaseName: TypeAlias = Literal[
     "port_scan",
     "banner_probe",
     "cve_match",
+    "access_control",
+    "ai_triage",
     "report",
 ]
-ToolName: TypeAlias = Literal["securitytrails", "httpx", "ffuf", "nmap", "masscan", "naabu", "dnsx", "subzy", "gau", "playwright", "cve_matcher", "orchestrator"]
+ToolName: TypeAlias = Literal["securitytrails", "httpx", "ffuf", "nmap", "masscan", "naabu", "dnsx", "subzy", "gau", "playwright", "cve_matcher", "orchestrator", "ai_analyst"]
+AiAutonomy: TypeAlias = Literal["off", "advise", "act"]
+AiProvider: TypeAlias = Literal["anthropic", "openai"]
 FindingStatus: TypeAlias = Literal["observed", "candidate"]
 CveMatchedField: TypeAlias = Literal[
     "title",
@@ -175,6 +180,19 @@ class ScanConfig(BaseSchemaModel):
     cidr_resume_enabled: bool = True
     cidr_split_min_prefix: int | None = Field(default=None, ge=0, le=32)
     cidr_split_strategy: Literal["host_count", "time_estimate"] = "host_count"
+    # --- LLM-in-the-loop triage (ai_triage phase) ---
+    # When the ai_triage phase is enabled, an LLM analyst scores observed hosts/subdomains
+    # by risk and (in "act" mode) autonomously enqueues deeper, scope-locked safe scans.
+    # Degrades gracefully to a deterministic heuristic when no API key is configured.
+    ai_triage_enabled: bool = True
+    ai_autonomy: AiAutonomy = "act"
+    ai_provider: AiProvider = "anthropic"
+    ai_model: str = ""
+    ai_api_key_env: str = "ANTHROPIC_API_KEY"
+    ai_min_risk_to_act: float = Field(default=0.6, ge=0.0, le=1.0)
+    ai_max_followups: int = Field(default=8, ge=0, le=200)
+    ai_max_iterations: int = Field(default=3, ge=1, le=10)
+    ai_request_timeout_seconds: int = Field(default=60, ge=1, le=600)
 
 
 class ArtifactRef(BaseSchemaModel):

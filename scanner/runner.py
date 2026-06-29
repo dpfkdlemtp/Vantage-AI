@@ -337,6 +337,12 @@ def execute_cve_match_tasks(run_id: str, *, workspace: Path | None = None) -> di
     return _execute_cve_match_tasks(run_id, workspace=workspace)
 
 
+def execute_ai_triage_tasks(run_id: str, *, workspace: Path | None = None) -> dict[str, Any]:
+    from scanner.execution.ai_triage import execute_ai_triage_tasks as _execute_ai_triage_tasks
+
+    return _execute_ai_triage_tasks(run_id, workspace=workspace)
+
+
 def render_summary_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
