@@ -85,6 +85,7 @@ UI_RUN_PRESETS: dict[str, dict[str, Any]] = {
         "defaults": {
             "ffuf_wordlist_path": str(DEFAULT_FFUF_WORDLIST),
             "nmap_ports": "1-65535",
+            "http_probe_all_open_ports": True,
             "ffuf_threads": 20,
         },
     },
@@ -103,6 +104,7 @@ UI_RUN_PRESETS: dict[str, dict[str, Any]] = {
         "defaults": {
             "ffuf_wordlist_path": str(DEFAULT_FFUF_WORDLIST),
             "nmap_ports": "1-65535",
+            "http_probe_all_open_ports": True,
             "ffuf_threads": 20,
             "ai_triage_enabled": True,
             "ai_autonomy": "act",

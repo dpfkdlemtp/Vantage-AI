@@ -127,7 +127,9 @@ def _llm_triage(
         "You only triage already-collected evidence; you never request exploitation, credential "
         "attacks, or out-of-scope actions. Given recon findings, rank hosts/subdomains/URLs by how "
         "much they warrant deeper but still safe enumeration (http probing, directory discovery, "
-        "port scanning). Respond with ONLY a JSON object of the form: "
+        "port scanning). Pay special attention to open ports on non-standard / high port numbers "
+        "(e.g. 10002): these often host hidden web admin panels or internal services, so prioritize "
+        "http probing and directory discovery on them. Respond with ONLY a JSON object of the form: "
         '{"summary": str, "targets": [{"target": str, "risk_score": 0.0-1.0, "rationale": str, '
         '"signals": [str], "suggested_modules": ["http_probe"|"dir_enum"|"port_scan"]}]}. '
         "Only reference targets that appear in the evidence."
@@ -194,6 +196,10 @@ def heuristic_triage(evidence: dict[str, Any]) -> TriageResult:
             bump(host, 0.7, f"port:{port}/{HIGH_RISK_PORTS[port]}", None)
         elif port in WEB_PORTS:
             bump(host, 0.4, f"web_port:{port}", "http_probe")
+        elif port is not None and port > 1024:
+            # Hidden services tend to live on non-standard high ports (e.g. :10002).
+            # Surface them for HTTP probing + directory discovery.
+            bump(host, 0.6, f"non_standard_port:{port}", "http_probe")
 
     for key, risk in risks.items():
         if key in cve_targets or any(key in cve for cve in cve_targets):

@@ -14,6 +14,7 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 - [Why Vantage-AI](#why-vantage-ai)
 - [Architecture](#architecture)
 - [Capabilities (scan phases)](#capabilities-scan-phases)
+- [Finding hidden ports & their hidden directories](#finding-hidden-ports--their-hidden-directories)
 - [The `ai_triage` phase (LLM-in-the-loop)](#the-ai_triage-phase-llm-in-the-loop)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -110,6 +111,36 @@ scanner/
 | `ai_triage` | LLM analyst | **Risk-scores findings and autonomously enqueues deeper scope-locked scans** |
 
 Supporting capabilities: WAF signature detection, GAU URL harvesting, subdomain-takeover checks (subzy), UDP scanning, and JS/SPA rendering (playwright) where enabled.
+
+---
+
+## Finding hidden ports & their hidden directories
+
+A core focus of Vantage-AI is uncovering services that hide on **non-standard ports** and the **sensitive directories** behind them — e.g. an admin panel on `:10002`. The full chain is automatic:
+
+```
+port_scan (full range) → http_probe (every open port) → dir_enum (ffuf) → ai_triage
+   finds :10002             confirms HTTP on :10002        finds /admin       flags it
+```
+
+The key is `http_probe_all_open_ports`: instead of only probing well-known web ports, http_probe attempts HTTP on **every** open port discovered by port_scan. httpx only records a hit when a port actually answers HTTP, so non-web ports (22, 445, …) produce no false positives — but a hidden web service on `:10002` is found and handed to `dir_enum`, which then enumerates its directories. The `ai_triage` analyst also explicitly prioritizes non-standard/high ports as likely hidden admin/internal services.
+
+This is enabled by default in **`deep` scan mode** and the **`full`** / **`ai`** presets. To turn it on explicitly:
+
+```bash
+python -m scanner.cli scan 10.0.0.5 \
+  -m port_scan -m http_probe -m dir_enum -m ai_triage
+# then set nmap_ports to a full range and http_probe_all_open_ports=true
+# (deep mode / full|ai preset set both for you)
+```
+
+### Worked example: `/admin` on `:10002`
+
+Real run against an authorized local target with a service hidden on port `10002`. Vantage-AI discovered the port, probed HTTP on it, and `dir_enum` found `/admin` — surfaced as **"Exposed admin route"** with a recursive-enumeration recommendation:
+
+![Hidden port :10002 → /admin discovered](docs/screenshots/06-hidden-port-admin.png)
+
+> `Observed live host 127.0.0.1:10002 [200]` → `Discovered path http://127.0.0.1:10002/admin [301]` → flagged *Exposed admin route*, with the AI recommending a recursive `ffuf` from the discovered sensitive paths.
 
 ---
 

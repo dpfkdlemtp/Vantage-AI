@@ -87,7 +87,9 @@ def _execute_cidr_chunk_downstream(
     if _run_cancelled(connection, run_id):
         return
 
-    raw_urls = _http_probe_urls_from_port_findings(chunk_findings)
+    raw_urls = _http_probe_urls_from_port_findings(
+        chunk_findings, probe_all_open_ports=run.config.http_probe_all_open_ports
+    )
     allowed_urls, _skipped_urls = filter_scope_urls(raw_urls, scope_controls)
 
     from scanner.runner import (
@@ -846,7 +848,8 @@ def execute_port_scan_tasks(run_id: str, *, workspace: Path | None = None) -> di
                             multichunk and want_chunk_pipe
                         ):
                             raw_urls = _http_probe_urls_from_port_findings(
-                                chunk_findings
+                                chunk_findings,
+                                probe_all_open_ports=run.config.http_probe_all_open_ports,
                             )
                             allowed_urls, _skipped_urls = filter_scope_urls(
                                 raw_urls, scope_controls

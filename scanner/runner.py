@@ -1704,6 +1704,8 @@ def _load_http_probe_targets(connection: sqlite3.Connection, run_id: str, task: 
 
 
 def _load_http_probe_targets_from_port_scan(connection: sqlite3.Connection, run_id: str) -> list[str]:
+    run = get_run(connection, run_id)
+    probe_all = bool(run is not None and run.config.http_probe_all_open_ports)
     rows = connection.execute(
         """
         SELECT evidence_json
@@ -1722,7 +1724,9 @@ def _load_http_probe_targets_from_port_scan(connection: sqlite3.Connection, run_
         except json.JSONDecodeError:
             _log.warning("skipping port_scan finding: malformed evidence_json")
             continue
-        base_url = _candidate_http_probe_target_from_port_scan_evidence(evidence)
+        base_url = _candidate_http_probe_target_from_port_scan_evidence(
+            evidence, probe_all_open_ports=probe_all
+        )
         if base_url is None or base_url in seen_targets:
             continue
         seen_targets.add(base_url)
@@ -1878,7 +1882,9 @@ def _normalize_http_probe_seed_target(value: object) -> str | None:
     return normalized
 
 
-def _candidate_http_probe_target_from_port_scan_evidence(evidence: object) -> str | None:
+def _candidate_http_probe_target_from_port_scan_evidence(
+    evidence: object, *, probe_all_open_ports: bool = False
+) -> str | None:
     if not isinstance(evidence, dict):
         return None
     if str(evidence.get("state") or "").lower() != "open":
@@ -1894,7 +1900,12 @@ def _candidate_http_probe_target_from_port_scan_evidence(evidence: object) -> st
         service=evidence.get("service"),
     )
     if scheme is None:
-        return None
+        # Hidden-service discovery: with this flag, attempt HTTP on any open port that
+        # we could not classify. httpx confirms whether it actually serves HTTP, so a
+        # non-web port simply yields no finding (no false positives).
+        if not probe_all_open_ports:
+            return None
+        scheme = "http"
     if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
         return f"{scheme}://{host}/"
     return f"{scheme}://{host}:{port}/"

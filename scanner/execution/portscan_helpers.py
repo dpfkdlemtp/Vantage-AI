@@ -77,12 +77,16 @@ def record_nmap_scan_warnings(
     runner_core._merge_task_cursor_json(connection, task_id, {"nmap_scan_warnings": merged})
 
 
-def http_probe_urls_from_port_findings(findings: list[Finding]) -> list[str]:
+def http_probe_urls_from_port_findings(
+    findings: list[Finding], *, probe_all_open_ports: bool = False
+) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for finding in findings:
         ev = finding.evidence_json if isinstance(finding.evidence_json, dict) else {}
-        url = runner_core._candidate_http_probe_target_from_port_scan_evidence(ev)
+        url = runner_core._candidate_http_probe_target_from_port_scan_evidence(
+            ev, probe_all_open_ports=probe_all_open_ports
+        )
         if url and url not in seen:
             seen.add(url)
             out.append(url)

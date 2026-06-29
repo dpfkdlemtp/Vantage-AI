@@ -117,6 +117,7 @@ PATCHABLE_CONFIG_FIELDS: tuple[str, ...] = (
     "assetfinder_bin",
     "httpx_threads",
     "httpx_timeout_seconds",
+    "http_probe_all_open_ports",
     "ffuf_threads",
     "ffuf_concurrency",
     "ffuf_parallel_enabled",

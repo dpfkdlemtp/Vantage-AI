@@ -106,6 +106,11 @@ class ScanConfig(BaseSchemaModel):
     proxy_url: str | None = None
     http_schemes: list[Literal["http", "https"]] = Field(default_factory=_default_http_schemes)
     probe_ports: list[int] = Field(default_factory=_default_probe_ports)
+    # When True, http_probe attempts HTTP on EVERY open port found by port_scan (not just
+    # known web ports / nmap-labelled http). This is how hidden HTTP services on non-standard
+    # ports (e.g. :10002) get discovered and then handed to dir_enum. httpx only records a
+    # finding when a port actually answers HTTP, so non-web ports produce no false positives.
+    http_probe_all_open_ports: bool = False
     httpx_timeout_seconds: int = Field(default=10, ge=1)
     httpx_threads: int = Field(default=10, ge=1)
     httpx_rate_limit_per_second: int | None = Field(default=None, ge=1)

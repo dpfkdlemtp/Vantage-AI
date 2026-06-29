@@ -86,6 +86,7 @@ def apply_scan_mode_defaults(
         "nmap_ports": "1-65535",
         "nmap_timing_template": "T2",
         "nmap_version_detection": True,
+        "http_probe_all_open_ports": True,
         "dir_recursive_enabled": True,
         "dir_recursive_max_depth": 3,
         "cidr_split_max_hosts_per_chunk": 64,
