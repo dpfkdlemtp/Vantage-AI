@@ -1,0 +1,42 @@
+# ---- Secrets / local env ----
+.env
+*.env
+!.env.example
+
+# ---- Engagement data & scan outputs (NEVER commit) ----
+reports/
+runs/
+json/
+oz/
+ffuf_scan.zip
+fsitest*
+tmp-*/
+*.log
+/json
+state.db
+*.sqlite
+*.sqlite3
+참고사항.md
+new.md
+
+# ---- Wordlists: keep small custom lists, exclude vendored SecLists (1.9GB) ----
+wordlists/SecLists-master/
+wordlists/**/SecLists*/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- OS / editor ----
+.DS_Store
+.vantage-settings.json
+*.swp
