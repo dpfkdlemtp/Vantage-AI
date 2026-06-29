@@ -1,256 +1,280 @@
-# Web Scanner
+# Vantage-AI
 
-`web-scanner` is a CLI-first defensive scanning orchestrator for authorized targets only.
-It wraps established external tools, stores resumable state in SQLite, saves raw artifacts,
-and normalizes findings into a consistent evidence-driven format.
+**An LLM-in-the-loop, resumable reconnaissance & web-assessment orchestrator for *authorized* targets.**
 
-## Safety Scope
+Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, masscan, naabu, dnsx, …), normalizes everything into a single evidence-driven `Finding` model, persists resumable state in SQLite, and adds an **AI analyst inside the scan loop**: it risk-scores what recon discovers and — in autonomous mode — enqueues deeper, **scope-locked, safe** scans on the targets that matter most.
 
-- Authorized defensive assessment only.
-- Safe defaults only.
-- No exploit delivery.
-- No credential attacks.
-- No stealth, evasion, persistence, or destructive checks.
-- CVE matches are candidate-only. They are not confirmed vulnerabilities.
+> ⚠️ **Authorized defensive use only.** No exploit delivery, no credential attacks, no stealth/evasion/persistence. CVE matches are *candidate-only* leads for manual verification, never confirmed vulnerabilities. Only scan assets you own or are explicitly authorized to test.
 
-## Current Capabilities
+---
 
-- `subdomain_enum`: free-tool-first subdomain discovery with `subfinder`, `assetfinder`, and `crt.sh`
-- `http_probe`: `httpx` probing for reachability, titles, and basic HTTP evidence
-- `dir_enum`: `ffuf` directory enumeration against live HTTP targets
-- `port_scan`: `nmap` TCP port and service detection
-- `cve_match`: offline candidate-only CVE matching from previously observed evidence
-- `ai_triage`: LLM-in-the-loop analyst that risk-scores observed hosts/subdomains and, in
-  `act` mode, autonomously enqueues deeper **scope-locked, safe** scans on the riskiest targets
+## Table of Contents
 
-## ai_triage: LLM-in-the-loop scanning
+- [Why Vantage-AI](#why-vantage-ai)
+- [Architecture](#architecture)
+- [Capabilities (scan phases)](#capabilities-scan-phases)
+- [The `ai_triage` phase (LLM-in-the-loop)](#the-ai_triage-phase-llm-in-the-loop)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [CLI reference](#cli-reference)
+- [Running scans end-to-end](#running-scans-end-to-end)
+- [AI configuration](#ai-configuration)
+- [Outputs & findings](#outputs--findings)
+- [Safety model](#safety-model)
+- [Development](#development)
+- [Disclaimer](#disclaimer)
 
-The optional `ai_triage` phase adds an analyst to the scan loop. After recon it builds a
-compact, redacted evidence summary and asks an LLM to rank hosts/subdomains/URLs by how much
-they warrant deeper (but still safe) enumeration. In `act` mode it converts the highest-risk
-targets into follow-up scans and re-queues itself — a bounded agentic loop.
+---
 
-Safety is enforced by construction:
+## Why Vantage-AI
 
-- It only acts on targets already observed by recon, and only within the authorized scope
-  (subdomains of the run target / IPs in range). It never invents new targets.
-- It can only trigger existing safe enumeration phases (http_probe / dir_enum / port_scan).
-  No exploit delivery, no credential attacks, no evasion. AI findings are `candidate`-only.
-- Autonomy is bounded by `ai_max_followups`, `ai_max_iterations`, and `ai_min_risk_to_act`.
+Most recon tooling either runs a fixed pipeline or dumps raw tool output and leaves prioritization to you. Vantage-AI adds a feedback loop:
 
-Provider/degradation: `ai_provider` selects `anthropic` (default) or `openai`; the key is read
-from the env var named by `ai_api_key_env` (`ANTHROPIC_API_KEY` by default). Calls go over the
-existing `httpx` dependency. With no API key (or any LLM error) the phase still runs using a
-deterministic offline heuristic, so it works in CI/air-gapped environments.
+- **Orchestration, not reinvention** — it drives proven tools and focuses on state, normalization, resumability, and reporting.
+- **Resumable by design** — every task lives in SQLite; interrupt and continue without losing findings or artifacts.
+- **Evidence-driven** — all results normalize into one `Finding` model, separated into hosts / subdomains / paths / ports / candidate-CVEs.
+- **AI analyst in the loop** — an LLM ranks the attack surface by risk and (optionally) *acts*: it autonomously queues deeper safe scans on the riskiest hosts and re-triages as new evidence arrives.
+- **Degrades gracefully** — no API key? The AI phase falls back to a deterministic heuristic, so it still works offline / in CI.
 
-Enable it via the `ai` UI preset, or `--module ai_triage`. `ai_autonomy` accepts `act`
-(autonomous, default), `advise` (record risk findings only), or `off`.
+---
+
+## Architecture
+
+```
+scanner/
+├── adapters/       External-tool wrappers (subfinder, assetfinder, crt.sh, securitytrails,
+│                   httpx, ffuf, nmap, masscan, naabu, dnsx, gau, subzy, udp, playwright, wappalyzer)
+├── normalizers/    Tool output → unified Finding model (subdomain, dirscan, portscan, cve, headers)
+├── execution/      Per-phase logic (http_probe, dir_enum, port_scan, banner_probe, cve_match,
+│                   access_control, waf_signatures, ai_triage, …)
+├── ai/             LLM-in-the-loop triage: client (Anthropic/OpenAI), analyst, planner, schemas
+├── ser/            Authenticated-session assessment (authorized use only; redaction + scope guard)
+├── storage.py      SQLite persistence (runs, tasks, findings, artifacts)
+├── state.py        Run/task state transitions
+├── runner.py       Orchestration, CIDR chunking, resume, incremental enqueueing
+├── report.py       JSON + HTML reports
+├── web.py          Local web UI (run creation, execution control, progress, partial results)
+├── installer.py    External-tool installer (go install / brew / winget / choco)
+└── watchdog.py     OS-aware stall detection + auto-throttle
+```
+
+**Design rules:** adapters / normalization / storage / runner / reporting stay separate; typed Pydantic models everywhere; every phase is independently resumable; deterministic logic preferred over heuristic guesses.
+
+---
+
+## Capabilities (scan phases)
+
+| Phase | Tool(s) | What it does |
+|---|---|---|
+| `subdomain_enum` | subfinder, assetfinder, crt.sh, securitytrails, dnsx | Subdomain discovery (free-tool-first) + DNS resolution / wildcard handling |
+| `http_probe` | httpx | Reachability, titles, tech stack, basic HTTP evidence |
+| `domain_discovery` | orchestrator | Derive/confirm in-scope root domains from observed evidence |
+| `dir_enum` | ffuf | Directory/content enumeration on live HTTP targets (recursion-aware) |
+| `port_scan` | nmap, masscan, naabu | TCP port & service detection; mass pre-scan + targeted NSE |
+| `banner_probe` | orchestrator | Service banner collection for triage |
+| `cve_match` | offline matcher | **Candidate-only** CVE inference from observed product/version/banner evidence |
+| `access_control` | internal | Safe access-control / authorization observation checks |
+| `ai_triage` | LLM analyst | **Risk-scores findings and autonomously enqueues deeper scope-locked scans** |
+
+Supporting capabilities: WAF signature detection, GAU URL harvesting, subdomain-takeover checks (subzy), UDP scanning, and JS/SPA rendering (playwright) where enabled.
+
+---
+
+## The `ai_triage` phase (LLM-in-the-loop)
+
+This is what makes Vantage-AI more than a pipeline runner. After recon, the `ai_triage` phase:
+
+1. **Summarizes evidence** — builds a compact, redacted view of subdomains, live hosts, open ports, directory hits, and candidate CVEs.
+2. **Risk-scores targets** — an LLM ranks hosts/subdomains/URLs by how much they warrant deeper (still safe) enumeration, with a rationale and signal list per target. Persisted as `candidate`-only findings tagged `ai`, `risk:high|medium|low`.
+3. **Acts autonomously** (in `act` mode) — converts the highest-risk targets into follow-up `http_probe` / `dir_enum` / `port_scan` tasks, **only within authorized scope**, then **re-queues itself** to react to the new findings — a bounded agentic loop.
+
+**Safety is enforced by construction:**
+
+- Acts **only on targets already observed** by recon, and **only within the authorized scope** (subdomains of the run target / IPs in range). It never invents new targets.
+- Can only trigger **existing safe enumeration phases**. No exploit delivery, no credential attacks, no evasion.
+- **Bounded** by `ai_max_followups` (total deeper scans), `ai_max_iterations` (re-triage passes), and gated by `ai_min_risk_to_act`.
+
+**Provider-agnostic & offline-safe:**
+
+- `ai_provider` = `anthropic` (default) or `openai`; the API key is read from the env var named by `ai_api_key_env` (`ANTHROPIC_API_KEY` by default). Calls go over the existing `httpx` dependency — no extra SDK.
+- **No key? It still runs**, using a deterministic keyword/port heuristic. Same output shape, so CI and air-gapped runs work.
+
+---
 
 ## Requirements
 
-- Python 3.12+
-- `subfinder` installed and available on `PATH`
-- `assetfinder` installed and available on `PATH`
-- Access to `crt.sh` for certificate-transparency lookups
-- `httpx` installed and available on `PATH`
-- `ffuf` installed and available on `PATH`
-- `nmap` installed and available on `PATH`
-- A local wordlist for `ffuf` if you plan to run `dir_enum`
+- **Python 3.12+**
+- External tools on `PATH` (install what you need for the phases you run): `subfinder`, `assetfinder`, `httpx`, `ffuf`, `nmap`; optionally `masscan`, `naabu`, `dnsx`, `gau`, `subzy`. `crt.sh` is reached over the network.
+- A local wordlist for `ffuf` if running `dir_enum` (SecLists is **not** committed — see [Wordlists](#wordlists)).
+- *(Optional)* An LLM API key for `ai_triage` to use a model instead of the offline heuristic.
 
-Install external binaries with your package manager or the official installation method for
-each tool, then confirm they are available in your shell:
+Check what's installed:
 
 ```bash
-httpx -version
-ffuf -V
-nmap --version
+python -m scanner.cli tools-check
+# or install missing Go/native tools:
+python -m scanner.cli tools-install
 ```
+
+---
 
 ## Installation
 
 ```bash
+git clone https://github.com/dpfkdlemtp/Vantage-AI.git
+cd Vantage-AI
 python3.12 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e '.[dev]'
 ```
 
-## Environment Variables
+### Environment variables
 
-Copy the example file and export the values in your shell before running phase workers.
-The project does not auto-load `.env` files.
+The project does not auto-load `.env`. Export values in your shell:
 
 ```bash
 cp .env.example .env
-set -a
-source .env
-set +a
+# edit .env, then:
+set -a; source .env; set +a
 ```
 
-No environment variables are required for the default passive subdomain flow.
+No env vars are required for the default passive flow. For LLM-backed `ai_triage`:
 
-## Wordlists
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...     # default provider
+# or, for OpenAI: set OPENAI_API_KEY and ai_api_key_env=OPENAI_API_KEY / ai_provider=openai
+```
 
-The repository intentionally does not ship real directory wordlists. Put your own safe,
-licensed, authorized wordlists under `wordlists/` or another path you control.
+### Wordlists
 
-Important:
+SecLists (~2 GB) is intentionally **not** committed (see `.gitignore`). Put your own authorized wordlists under `wordlists/`, or drop SecLists there locally. `dir_enum` needs `ffuf_wordlist_path` configured before it runs.
 
-- `dir_enum` needs `ffuf_wordlist_path` to be configured before that phase runs.
-- The current CLI does not expose a `--wordlist` flag yet.
-- If you execute `dir_enum`, make sure the run config points to a valid local wordlist path.
+---
 
-See `wordlists/README.md` for the expected usage.
+## Quick start
 
-## CLI Workflow
+**Web UI (recommended):**
 
-The current CLI surface is intentionally small and safe:
+```bash
+python -m scanner.cli ui            # then open http://127.0.0.1:8000
+```
 
-- `scan` creates a new run, persists config/state, and enqueues pending tasks
-- `extend` adds new modules to an existing run while preserving saved findings, artifacts, and completed tasks
-- `resume` loads an existing run and shows incomplete tasks
-- `report` reads persisted findings/artifacts and prints a JSON summary
-- `report --html` writes a readable HTML report in addition to the JSON summary
+Create a run, pick the **AI-driven** preset, and watch the AI analyst triage and dig deeper in real time.
 
-Important:
+**CLI:**
 
-- `scan` does not immediately execute external scanners.
-- `resume` does not execute tasks either.
-- Phase execution is handled by the phase runners in the application layer.
+```bash
+# Create a run that includes the AI analyst (ordered last, after recon)
+python -m scanner.cli scan example.com \
+  -m subdomain_enum -m http_probe -m dir_enum -m port_scan -m ai_triage \
+  --profile balanced
+```
 
-For subdomain discovery, the default source order is:
+> `scan` creates and enqueues the run; it does **not** execute scanners itself. Execute phases via the Web UI, or the phase runners (below).
 
-- `subfinder`
-- `assetfinder`
-- `crt.sh`
+---
 
-## Running Phase Workers Today
+## CLI reference
 
-Dedicated CLI commands for phase execution are not exposed yet. To execute the queued phases,
-run the phase helpers from the same workspace where you created the run:
+| Command | Purpose |
+|---|---|
+| `scan TARGET [-m MODULE ...] [--profile safe\|balanced\|fast]` | Create a run and enqueue tasks |
+| `resume RUN_ID` | Show resumable (incomplete) tasks for a run |
+| `extend RUN_ID -m MODULE ...` | Add phases to an existing run, preserving saved results |
+| `report RUN_ID [--html PATH]` | Print JSON summary; optionally write HTML |
+| `ui [--host H] [--port P] [--workspace DIR]` | Start the local web UI |
+| `tools-check` / `tools-install` | Inspect / install external tool dependencies |
+| `watchdog-start` / `watchdog-stop` / `watchdog-status` / `watchdog-tail` | OS-aware stall detection & auto-throttle |
+| `ser ...` | Authenticated-session assessment tools (authorized use only) |
+
+---
+
+## Running scans end-to-end
+
+`scan` only enqueues. To execute phases from the same workspace where the run was created:
 
 ```bash
 python - <<'PY'
 from scanner.runner import (
-    execute_cve_match_tasks,
-    execute_dir_enum_tasks,
-    execute_http_probe_tasks,
-    execute_port_scan_tasks,
-    execute_subdomain_enum_tasks,
+    execute_subdomain_enum_tasks, execute_http_probe_tasks, execute_dir_enum_tasks,
+    execute_port_scan_tasks, execute_banner_probe_tasks, execute_cve_match_tasks,
+    execute_ai_triage_tasks,
 )
-
-run_id = "run-20260409123000-ab12cd34"
-
+run_id = "REPLACE_WITH_RUN_ID"
 print(execute_subdomain_enum_tasks(run_id))
 print(execute_http_probe_tasks(run_id))
-print(execute_dir_enum_tasks(run_id))
 print(execute_port_scan_tasks(run_id))
-print(execute_cve_match_tasks(run_id))
+print(execute_dir_enum_tasks(run_id))
+print(execute_banner_probe_tasks(run_id))
+print(execute_ai_triage_tasks(run_id))   # LLM analyst: scores risk + (act mode) queues deeper scans
 PY
 ```
 
-Run phases in order. Each phase is resumable and reads persisted outputs from earlier phases.
-If you plan to run `dir_enum`, make sure `ffuf_wordlist_path` is configured first.
+Run phases in order; each is resumable and reads persisted outputs from earlier phases. In the **Web UI**, the execution loop runs multiple passes so AI-enqueued follow-ups (and re-triage) complete within the same run automatically.
 
-## Example Commands
+---
 
-Create a run with the default module set:
+## AI configuration
 
-```bash
-python -m scanner.cli scan example.com
+`ai_triage` is controlled by these `ScanConfig` fields (set via the `ai` UI preset or run config):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `ai_triage_enabled` | `true` | Master switch for the phase |
+| `ai_autonomy` | `act` | `act` (autonomous deeper scans) · `advise` (record risk findings only) · `off` |
+| `ai_provider` | `anthropic` | `anthropic` or `openai` |
+| `ai_model` | `""` | Model id; empty → provider default (`claude-sonnet-4-6` / `gpt-4o-mini`) |
+| `ai_api_key_env` | `ANTHROPIC_API_KEY` | Env var name to read the key from |
+| `ai_min_risk_to_act` | `0.6` | Risk threshold (0–1) to enqueue a follow-up |
+| `ai_max_followups` | `8` | Total autonomous follow-up scans per run (budget) |
+| `ai_max_iterations` | `3` | Max re-triage passes (loop bound) |
+| `ai_request_timeout_seconds` | `60` | Per-request LLM timeout |
+
+**Autonomy modes at a glance:**
+
+- `act` — the headline mode. LLM scores risk and autonomously queues deeper safe scans within scope.
+- `advise` — LLM records risk findings; a human decides whether to `extend` the run.
+- `off` — phase is a no-op.
+
+---
+
+## Outputs & findings
+
 ```
-
-Create a run with a specific module set and speed profile:
-
-```bash
-python -m scanner.cli scan example.com \
-  --module subdomain_enum \
-  --module http_probe \
-  --profile balanced
-```
-
-Inspect resumable state for an existing run:
-
-```bash
-python -m scanner.cli resume run-20260409123000-ab12cd34
-```
-
-Extend an existing run with later phases while keeping previously saved results:
-
-```bash
-python -m scanner.cli extend run-20260409123000-ab12cd34 \
-  --module subdomain_enum \
-  --module dir_enum
-```
-
-Print the JSON report summary for a run:
-
-```bash
-python -m scanner.cli report run-20260409123000-ab12cd34
-```
-
-Write an HTML report while still printing the JSON summary to stdout:
-
-```bash
-python -m scanner.cli report run-20260409123000-ab12cd34 \
-  --html reports/run-20260409123000-ab12cd34.html
-```
-
-## Outputs
-
-### `runs/`
-
-Each run gets its own directory:
-
-```text
 runs/<run_id>/
-├── state.db
-└── artifacts/
+├── state.db        # SQLite: run state, tasks, findings, artifact references
+└── artifacts/      # raw tool outputs (subfinder/httpx/ffuf/nmap/... XML/JSON/logs)
 ```
 
-- `state.db`: SQLite database for run state, tasks, findings, and artifact references
-- `artifacts/`: raw output files saved from passive discovery and wrapped tools such as
-  `subfinder`, `assetfinder`, `crt.sh`, `httpx`, `ffuf`, and `nmap`
+- **Artifacts** are stored on disk; SQLite holds metadata (path, sha256, size, content-type) — not raw blobs.
+- **Findings** normalize into one model and group in reports as: subdomains · live hosts · directory hits · open ports/services · candidate CVEs · **AI risk findings** (`candidate`-only, tagged `ai`/`risk:*`).
+- `report RUN_ID` prints a JSON summary; `--html` also writes a readable HTML report.
 
-### `reports/`
+---
 
-- HTML reports written by `report --html`
-- Reserved location for generated report files
+## Safety model
 
-Note: the CLI currently prints JSON summaries to stdout. It does not automatically write a
-JSON report file to disk.
+- Authorized defensive assessment **only**.
+- Safe defaults; **no** exploit delivery, credential attacks, stealth, evasion, persistence, or destructive checks.
+- CVE matches are **candidate-only** (matched product/version, confidence, evidence source, `candidate_only=true`).
+- The AI analyst **cannot widen scope**: it acts only on already-observed targets inside the authorized scope, triggers only safe enumeration phases, and is bounded by explicit budgets.
+- Authenticated-session (`ser`) tooling redacts secrets and enforces a scope allowlist.
 
-### Artifacts
+---
 
-Raw tool outputs are saved under `runs/<run_id>/artifacts/` and referenced from SQLite.
-The database stores metadata such as path, hash, size, and content type. Raw content is not
-embedded in SQLite rows.
+## Development
 
-### Incremental Follow-up
+```bash
+python -m pytest          # full test suite
+python -m mypy scanner    # type check
+python -m ruff check .     # lint
+```
 
-Runs can be continued from saved state. A common flow is:
+The suite mocks subprocess/tool/network calls by default, so it runs without the external binaries or an LLM key.
 
-1. Create a low-impact first pass such as `port_scan`.
-2. Execute that phase and inspect the saved findings/artifacts.
-3. Add later modules with `extend` or from the Progress page run options.
-4. Resume execution so the newly added pending tasks continue from the same run.
+---
 
-Existing findings, artifacts, and completed tasks stay attached to the same run.
+## Disclaimer
 
-### Findings
-
-Normalized findings are stored in SQLite and returned by the `report` command. They are
-evidence-driven and grouped in reports as:
-
-- subdomains
-- live hosts / HTTP probe results
-- directory findings
-- open ports / services
-- candidate CVEs
-
-## Candidate CVEs
-
-CVE matches in this project are inference-only. They are generated from previously observed
-evidence such as titles, products, versions, or service banners.
-
-Every candidate should be treated as a lead for manual verification, not as a confirmed
-vulnerability.
+This project is for **authorized** security assessment and educational use only. You are responsible for ensuring you have explicit permission to scan any target. The authors assume no liability for misuse. Candidate CVEs and AI risk scores are **leads for manual verification**, not confirmed findings.
