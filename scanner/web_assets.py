@@ -1720,7 +1720,7 @@ function profileDeltaLines(profile) {
 }
 
 function NewScanModal({ open, onClose, onCreated, onUpdated, rerunPrefill, rerunSourceRunId, onConsumeRerunPrefill, modalMode = "new", editRunId = "", editRunStatus = "" }) {
-  const MODULES = ["port_scan","http_probe","domain_discovery","dir_enum","banner_probe","subdomain_enum"];
+  const MODULES = ["port_scan","http_probe","domain_discovery","dir_enum","banner_probe","subdomain_enum","ai_triage"];
   const defaultSpeedIndex = SPEED_LEVELS.indexOf("T3");
   const [target, setTarget] = useState("");
   const [profile, setProfile] = useState("safe");
@@ -2946,7 +2946,7 @@ function RunPickerPage({ page, title, subtitle }) {
   );
 }
 
-const MODULE_OPTIONS = ["subdomain_enum","http_probe","domain_discovery","dir_enum","port_scan","banner_probe"];
+const MODULE_OPTIONS = ["subdomain_enum","http_probe","domain_discovery","dir_enum","port_scan","banner_probe","ai_triage"];
 
 function SettingsPanel({ label, children }) {
   return (

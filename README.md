@@ -10,6 +10,7 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Why Vantage-AI](#why-vantage-ai)
 - [Architecture](#architecture)
 - [Capabilities (scan phases)](#capabilities-scan-phases)
@@ -24,6 +25,37 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 - [Safety model](#safety-model)
 - [Development](#development)
 - [Disclaimer](#disclaimer)
+
+---
+
+## Screenshots
+
+> Captured from a real, authorized run against `127.0.0.1` (the local UI host) — the LLM analyst's reasoning is genuine model output.
+
+**Findings — the LLM analyst at work.** Risk-scored targets with natural-language rationale, candidate-CVE tags, and a priority queue. The AI flags that locally exposed SMB (445) + MSRPC (135) alongside a web service "suggest a Windows host running a dev stack."
+
+![Findings — AI analyst](docs/screenshots/05-findings.png)
+
+**Execution — bounded autonomous loop.** `port_scan → http_probe → ai_triage → http_probe → dir_enum → ai_triage`: the analyst enqueues deeper scope-locked scans, then re-triages. Live checkpoints, resumable state, 100% completion.
+
+![Execution](docs/screenshots/04-execution.png)
+
+**Run summary.** Evidence-driven cards (hosts, open ports, HTTP endpoints, directories, candidate CVEs), HTTP status distribution, and top ports.
+
+![Run summary](docs/screenshots/03-run-summary.png)
+
+<details>
+<summary>More: dashboard & new-scan</summary>
+
+**Dashboard** — run inventory and launch control:
+
+![Dashboard](docs/screenshots/01-dashboard.png)
+
+**New Scan** — scan mode, target, modules (including `ai_triage`), and the AI-driven preset:
+
+![New scan](docs/screenshots/02-new-scan.png)
+
+</details>
 
 ---
 
