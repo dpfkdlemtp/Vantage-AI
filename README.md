@@ -1,8 +1,10 @@
 # Vantage-AI
 
-**An LLM-in-the-loop, resumable reconnaissance & web-assessment orchestrator for *authorized* targets.**
+**A resumable reconnaissance & web-assessment orchestrator for *authorized* targets — fully useful on its own, with an *optional* LLM analyst.**
 
-Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, masscan, naabu, dnsx, …), normalizes everything into a single evidence-driven `Finding` model, persists resumable state in SQLite, and adds an **AI analyst inside the scan loop**: it risk-scores what recon discovers and — in autonomous mode — enqueues deeper, **scope-locked, safe** scans on the targets that matter most.
+Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, masscan, naabu, dnsx, …), normalizes everything into a single evidence-driven `Finding` model, persists resumable state in SQLite, chains discovery automatically (subdomains → live hosts → **hidden ports → their hidden directories**), and reports it all through a CLI and a local web UI.
+
+> ✅ **No LLM required.** The entire scanning pipeline — discovery, probing, directory enumeration, port scanning, candidate-CVE matching, resumable state, and reporting — runs with **zero API keys and no AI**. It's a complete, manual-driven scanner out of the box. The `ai_triage` phase is a **purely optional** layer you opt into (and even then it falls back to a deterministic heuristic when no key is set). See [Works with or without an LLM](#works-with-or-without-an-llm).
 
 > ⚠️ **Authorized defensive use only.** No exploit delivery, no credential attacks, no stealth/evasion/persistence. CVE matches are *candidate-only* leads for manual verification, never confirmed vulnerabilities. Only scan assets you own or are explicitly authorized to test.
 
@@ -12,6 +14,7 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 
 - [Screenshots](#screenshots)
 - [Why Vantage-AI](#why-vantage-ai)
+- [Works with or without an LLM](#works-with-or-without-an-llm)
 - [Architecture](#architecture)
 - [Capabilities (scan phases)](#capabilities-scan-phases)
 - [Finding hidden ports & their hidden directories](#finding-hidden-ports--their-hidden-directories)
@@ -31,19 +34,19 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 
 ## Screenshots
 
-> Captured from a real, authorized run against `127.0.0.1` (the local UI host) — the LLM analyst's reasoning is genuine model output.
+> Captured from real, authorized runs against `127.0.0.1` (the local UI host).
 
-**Findings — the LLM analyst at work.** Risk-scored targets with natural-language rationale, candidate-CVE tags, and a priority queue. The AI flags that locally exposed SMB (445) + MSRPC (135) alongside a web service "suggest a Windows host running a dev stack."
+**Run summary (core — no LLM).** Evidence-driven cards (hosts, open ports, HTTP endpoints, directories, candidate CVEs), HTTP status distribution, and top ports — the standard output of a manual scan.
 
-![Findings — AI analyst](docs/screenshots/05-findings.png)
+![Run summary](docs/screenshots/03-run-summary.png)
 
-**Execution — bounded autonomous loop.** `port_scan → http_probe → ai_triage → http_probe → dir_enum → ai_triage`: the analyst enqueues deeper scope-locked scans, then re-triages. Live checkpoints, resumable state, 100% completion.
+**Execution (core — no LLM).** The resumable, multi-pass execution loop with live checkpoints and 100% completion. (When the optional `ai_triage` phase is enabled it also enqueues deeper scans here, but the loop itself is LLM-free.)
 
 ![Execution](docs/screenshots/04-execution.png)
 
-**Run summary.** Evidence-driven cards (hosts, open ports, HTTP endpoints, directories, candidate CVEs), HTTP status distribution, and top ports.
+**Findings.** Normalized, prioritized findings. The natural-language risk rationale shown here comes from the **optional** `ai_triage` phase — without it you get the same evidence, tags, and priority queue to triage manually.
 
-![Run summary](docs/screenshots/03-run-summary.png)
+![Findings](docs/screenshots/05-findings.png)
 
 <details>
 <summary>More: dashboard & new-scan</summary>
@@ -52,7 +55,7 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 
 ![Dashboard](docs/screenshots/01-dashboard.png)
 
-**New Scan** — scan mode, target, modules (including `ai_triage`), and the AI-driven preset:
+**New Scan** — scan mode, target, and modules (`ai_triage` is one optional module among the standard recon phases):
 
 ![New scan](docs/screenshots/02-new-scan.png)
 
@@ -62,13 +65,36 @@ Vantage-AI wraps battle-tested external tools (subfinder, httpx, ffuf, nmap, mas
 
 ## Why Vantage-AI
 
-Most recon tooling either runs a fixed pipeline or dumps raw tool output and leaves prioritization to you. Vantage-AI adds a feedback loop:
+Most recon tooling either runs a fixed pipeline or dumps raw tool output and leaves prioritization to you. Vantage-AI is built to be a strong **manual-driven** scanner first:
 
 - **Orchestration, not reinvention** — it drives proven tools and focuses on state, normalization, resumability, and reporting.
 - **Resumable by design** — every task lives in SQLite; interrupt and continue without losing findings or artifacts.
 - **Evidence-driven** — all results normalize into one `Finding` model, separated into hosts / subdomains / paths / ports / candidate-CVEs.
-- **AI analyst in the loop** — an LLM ranks the attack surface by risk and (optionally) *acts*: it autonomously queues deeper safe scans on the riskiest hosts and re-triages as new evidence arrives.
-- **Degrades gracefully** — no API key? The AI phase falls back to a deterministic heuristic, so it still works offline / in CI.
+- **Automatic discovery chaining** — subdomains → live hosts → **hidden ports → their hidden directories**, with incremental follow-up scans enqueued as new evidence arrives — no AI needed.
+- **Operator-friendly** — CLI + local web UI, speed profiles, CIDR chunking, a stall-detection watchdog, and an external-tool installer.
+- **Optional AI analyst** — *if* you enable it, an LLM ranks the attack surface by risk and can autonomously queue deeper safe scans. Strictly additive: everything above works without it.
+
+---
+
+## Works with or without an LLM
+
+Vantage-AI is designed so the **LLM is a bonus, not a dependency**.
+
+| | Without any LLM (default) | With the optional `ai_triage` phase |
+|---|---|---|
+| Discovery → probe → dir_enum → port scan | ✅ full pipeline | ✅ same |
+| Hidden-port → hidden-directory chaining | ✅ automatic | ✅ same |
+| Candidate-CVE matching | ✅ offline signature engine | ✅ same |
+| Resumable state, CLI, web UI, reports | ✅ | ✅ |
+| Risk scoring / prioritization | manual (you triage the evidence) | model- or heuristic-scored, prioritized queue |
+| Autonomous "dig deeper on risky hosts" | — (you decide and `extend`) | opt-in `act` mode |
+
+Two things to note:
+
+1. **The `ai_triage` phase is opt-in.** Default scans never include it — it only runs if you select the `ai_triage` module (or the `ai` preset). Every other phase is fully manual/deterministic.
+2. **Even when enabled, no API key is required.** With no key, `ai_triage` uses a deterministic keyword/port heuristic (same output shape), so it still works offline and in CI. Set `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) only if you want model-quality reasoning.
+
+If you never touch the AI features, Vantage-AI is simply a fast, resumable, evidence-driven recon orchestrator.
 
 ---
 
@@ -108,7 +134,7 @@ scanner/
 | `banner_probe` | orchestrator | Service banner collection for triage |
 | `cve_match` | offline matcher | **Candidate-only** CVE inference from observed product/version/banner evidence |
 | `access_control` | internal | Safe access-control / authorization observation checks |
-| `ai_triage` | LLM analyst | **Risk-scores findings and autonomously enqueues deeper scope-locked scans** |
+| `ai_triage` *(optional)* | LLM analyst *(or offline heuristic)* | Opt-in. Risk-scores findings and, in `act` mode, autonomously enqueues deeper scope-locked scans |
 
 Supporting capabilities: WAF signature detection, GAU URL harvesting, subdomain-takeover checks (subzy), UDP scanning, and JS/SPA rendering (playwright) where enabled.
 
@@ -116,37 +142,39 @@ Supporting capabilities: WAF signature detection, GAU URL harvesting, subdomain-
 
 ## Finding hidden ports & their hidden directories
 
-A core focus of Vantage-AI is uncovering services that hide on **non-standard ports** and the **sensitive directories** behind them — e.g. an admin panel on `:10002`. The full chain is automatic:
+A core focus of Vantage-AI is uncovering services that hide on **non-standard ports** and the **sensitive directories** behind them — e.g. an admin panel on `:10002`. **This is a fully deterministic capability — no LLM involved.** The chain is automatic:
 
 ```
-port_scan (full range) → http_probe (every open port) → dir_enum (ffuf) → ai_triage
-   finds :10002             confirms HTTP on :10002        finds /admin       flags it
+port_scan (full range) → http_probe (every open port) → dir_enum (ffuf)
+   finds :10002             confirms HTTP on :10002        finds /admin
 ```
 
-The key is `http_probe_all_open_ports`: instead of only probing well-known web ports, http_probe attempts HTTP on **every** open port discovered by port_scan. httpx only records a hit when a port actually answers HTTP, so non-web ports (22, 445, …) produce no false positives — but a hidden web service on `:10002` is found and handed to `dir_enum`, which then enumerates its directories. The `ai_triage` analyst also explicitly prioritizes non-standard/high ports as likely hidden admin/internal services.
+The key is `http_probe_all_open_ports`: instead of only probing well-known web ports, http_probe attempts HTTP on **every** open port discovered by port_scan. httpx only records a hit when a port actually answers HTTP, so non-web ports (22, 445, …) produce no false positives — but a hidden web service on `:10002` is found and handed to `dir_enum`, which then enumerates its directories. (The optional `ai_triage` phase additionally prioritizes non-standard/high ports, but the discovery itself needs no AI.)
 
-This is enabled by default in **`deep` scan mode** and the **`full`** / **`ai`** presets. To turn it on explicitly:
+This is enabled by default in **`deep` scan mode** and the **`full`** / **`ai`** presets. To turn it on explicitly (LLM-free):
 
 ```bash
 python -m scanner.cli scan 10.0.0.5 \
-  -m port_scan -m http_probe -m dir_enum -m ai_triage
+  -m port_scan -m http_probe -m dir_enum
 # then set nmap_ports to a full range and http_probe_all_open_ports=true
-# (deep mode / full|ai preset set both for you)
+# (deep mode / full preset set both for you)
 ```
 
 ### Worked example: `/admin` on `:10002`
 
-Real run against an authorized local target with a service hidden on port `10002`. Vantage-AI discovered the port, probed HTTP on it, and `dir_enum` found `/admin` — surfaced as **"Exposed admin route"** with a recursive-enumeration recommendation:
+Real run against an authorized local target with a service hidden on port `10002`. Vantage-AI discovered the port, probed HTTP on it, and `dir_enum` found `/admin` — surfaced as **"Exposed admin route"** with a recursive-enumeration recommendation. (This screenshot happens to show the optional AI phase enabled too, but the port→directory discovery is entirely deterministic.)
 
 ![Hidden port :10002 → /admin discovered](docs/screenshots/06-hidden-port-admin.png)
 
-> `Observed live host 127.0.0.1:10002 [200]` → `Discovered path http://127.0.0.1:10002/admin [301]` → flagged *Exposed admin route*, with the AI recommending a recursive `ffuf` from the discovered sensitive paths.
+> `Observed live host 127.0.0.1:10002 [200]` → `Discovered path http://127.0.0.1:10002/admin [301]` → flagged *Exposed admin route*.
 
 ---
 
 ## The `ai_triage` phase (LLM-in-the-loop)
 
-This is what makes Vantage-AI more than a pipeline runner. After recon, the `ai_triage` phase:
+> **Optional & opt-in.** Everything above works without this phase. Skip this section entirely if you only want the manual scanner. It runs only when you select the `ai_triage` module or the `ai` preset, and it works with no API key (deterministic heuristic fallback).
+
+When enabled, the `ai_triage` phase adds a triage/prioritization layer on top of recon. After recon, it:
 
 1. **Summarizes evidence** — builds a compact, redacted view of subdomains, live hosts, open ports, directory hits, and candidate CVEs.
 2. **Risk-scores targets** — an LLM ranks hosts/subdomains/URLs by how much they warrant deeper (still safe) enumeration, with a rationale and signal list per target. Persisted as `candidate`-only findings tagged `ai`, `risk:high|medium|low`.
@@ -223,12 +251,19 @@ SecLists (~2 GB) is intentionally **not** committed (see `.gitignore`). Put your
 python -m scanner.cli ui            # then open http://127.0.0.1:8000
 ```
 
-Create a run, pick the **AI-driven** preset, and watch the AI analyst triage and dig deeper in real time.
+Create a run, pick a preset (`quick` / `web` / `full`), and drive it from the browser — no API key needed.
 
-**CLI:**
+**CLI — standard scan (no LLM):**
 
 ```bash
-# Create a run that includes the AI analyst (ordered last, after recon)
+python -m scanner.cli scan example.com \
+  -m subdomain_enum -m http_probe -m dir_enum -m port_scan \
+  --profile balanced
+```
+
+**CLI — with the optional AI analyst** (only if you want it; add the `ai_triage` module or use the `ai` preset):
+
+```bash
 python -m scanner.cli scan example.com \
   -m subdomain_enum -m http_probe -m dir_enum -m port_scan -m ai_triage \
   --profile balanced
