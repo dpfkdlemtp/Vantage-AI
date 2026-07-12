@@ -72,7 +72,7 @@ set +a
 
 ```bash
 source ~/.zshrc
-cd /Users/hatae/web-scanner2
+cd Vantage-AI
 source .venv/bin/activate
 cp .env.example .env
 set -a
